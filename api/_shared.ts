@@ -82,26 +82,24 @@ export function env(name: string, fallback = ""): string {
 /* CORS                                                                */
 /* ------------------------------------------------------------------ */
 
-export function allowedOrigins(): string[] {
-  return env("ALLOWED_ORIGINS", "http://localhost:5173")
-    .split(",")
-    .map((o) => o.trim())
-    .filter(Boolean);
-}
-
+/**
+ * This deployment is a compatibility endpoint for the public chat API —
+ * any site origin may call it (content is public). Stale cached bundles of
+ * the site call here cross-origin; permissive CORS keeps them working while
+ * the same-origin API in metademic-organization is the primary path.
+ */
 export function applyCors(req: IncomingMessage, res: ServerResponse): boolean {
   const origin = req.headers.origin;
   if (!origin) return true; // same-origin / server-to-server calls
-  const allowed = allowedOrigins();
-  if (allowed.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    res.setHeader("Access-Control-Max-Age", "600");
-    return true;
-  }
-  return false;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Supabase-Token",
+  );
+  res.setHeader("Access-Control-Max-Age", "600");
+  return true;
 }
 
 /* ------------------------------------------------------------------ */

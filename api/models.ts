@@ -18,6 +18,11 @@ export default async function handler(
     res.end("Origin not allowed");
     return;
   }
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
   if (req.method !== "GET") {
     res.statusCode = 405;
     res.end("Use GET for /api/models.");
