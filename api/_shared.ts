@@ -16,9 +16,11 @@
  *   CHAT_SYSTEM_PROMPT optional — overrides the built-in assistant prompt
  *   ALLOWED_ORIGINS optional — CSV of CORS origins (default: local dev only)
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY — persist chat history
+ *
+ * Provider calls use plain fetch (OpenAI-compatible REST) — no SDK runtime
+ * dependency, so function bundles stay small and cold starts stay fast.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import OpenAI from "openai";
 
 export type ChatRole = "user" | "assistant" | "system";
 
@@ -35,6 +37,15 @@ export interface ChatBody {
   images?: string[];
   attachments?: { name?: string }[];
 }
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ProviderMessage = {
+  role: "system" | "user" | "assistant";
+  content: string | ContentPart[];
+};
 
 export const DEFAULT_BASE_URL = "https://api.together.xyz/v1";
 export const DEFAULT_LLM_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731";
@@ -163,21 +174,84 @@ export function sseEvent(payload: { delta?: string; error?: string }): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Provider client                                                     */
+/* Provider streaming (OpenAI-compatible REST, no SDK)                 */
 /* ------------------------------------------------------------------ */
 
-let cachedClient: OpenAI | null = null;
-let cachedClientKey: string | null = null;
+export interface StreamCompletionOptions {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  messages: ProviderMessage[];
+  temperature: number;
+  signal?: AbortSignal;
+}
 
-export function getClient(): OpenAI {
-  const key = env("LLM_API_KEY");
-  if (!key) throw new Error("The chat service is not configured (LLM_API_KEY missing).");
-  const baseUrl = env("LLM_BASE_URL", DEFAULT_BASE_URL);
-  const cacheKey = `${baseUrl}\u0000${key}`;
-  if (cachedClient && cachedClientKey === cacheKey) return cachedClient;
-  cachedClient = new OpenAI({ apiKey: key, baseURL: baseUrl });
-  cachedClientKey = cacheKey;
-  return cachedClient;
+/** Yields content deltas from a streaming chat completion. */
+export async function* streamCompletion(
+  options: StreamCompletionOptions,
+): AsyncGenerator<string> {
+  const response = await fetch(
+    `${options.baseUrl.replace(/\/$/, "")}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: options.model,
+        messages: options.messages,
+        temperature: options.temperature,
+        stream: true,
+      }),
+      signal: options.signal,
+    },
+  );
+  if (!response.ok || !response.body) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(
+      `Provider error ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf("\n");
+    while (boundary !== -1) {
+      const line = buffer.slice(0, boundary).trim();
+      buffer = buffer.slice(boundary + 1);
+      boundary = buffer.indexOf("\n");
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "" || payload === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(payload) as {
+          choices?: { delta?: { content?: string } }[];
+          error?: { message?: string };
+        };
+        if (chunk.error?.message) throw new Error(chunk.error.message);
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) yield delta;
+      } catch (error) {
+        if (error instanceof SyntaxError) continue; // tolerate partial frame
+        throw error;
+      }
+    }
+  }
+}
+
+export function getProviderConfig(): {
+  baseUrl: string;
+  apiKey: string;
+} {
+  const apiKey = env("LLM_API_KEY");
+  if (!apiKey) return { baseUrl: env("LLM_BASE_URL", DEFAULT_BASE_URL), apiKey: "" };
+  return { baseUrl: env("LLM_BASE_URL", DEFAULT_BASE_URL), apiKey };
 }
 
 /* ------------------------------------------------------------------ */
@@ -224,4 +298,10 @@ export async function persistConversation(
   } catch (error) {
     console.error("chat history persist failed:", error);
   }
+}
+
+export function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(payload));
 }

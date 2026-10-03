@@ -1,8 +1,3 @@
-import OpenAI from "openai";
-import type {
-  ChatCompletionContentPart,
-  ChatCompletionMessageParam,
-} from "openai/resources/chat/completions";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   DEFAULT_LLM_MODEL,
@@ -18,13 +13,17 @@ import {
   applyCors,
   clientIp,
   env,
-  getClient,
+  getProviderConfig,
   persistConversation,
   rateLimited,
   resolveModel,
+  sendJson,
   sseEvent,
+  streamCompletion,
   type ChatBody,
   type ChatMessageIn,
+  type ContentPart,
+  type ProviderMessage,
 } from "./_shared";
 
 type NodeRequest = IncomingMessage;
@@ -53,9 +52,9 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 function buildPayloadMessages(
   messages: ChatStorageMessage[],
-): ChatCompletionMessageParam[] {
+): ProviderMessage[] {
   const trimmed = messages.slice(-HISTORY_TURNS);
-  const payload: ChatCompletionMessageParam[] = [
+  const payload: ProviderMessage[] = [
     {
       role: "system",
       content:
@@ -70,7 +69,7 @@ function buildPayloadMessages(
       message === trimmed[trimmed.length - 1] &&
       (message.images?.length ?? 0) > 0;
     if (isLastUserWithImages) {
-      const parts: ChatCompletionContentPart[] = [
+      const parts: ContentPart[] = [
         { type: "text", text: message.content || "Describe the attached image." },
       ];
       for (const image of message.images ?? []) {
@@ -216,20 +215,16 @@ export default async function handler(
     if (!res.writableEnded) res.write(frame);
   };
 
+  const provider = getProviderConfig();
   try {
-    const client = getClient();
-    const stream = await client.chat.completions.create(
-      {
-        model,
-        messages: payloadMessages,
-        temperature,
-        stream: true,
-      },
-      { signal: controller.signal },
-    );
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (!delta) continue;
+    for await (const delta of streamCompletion({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model,
+      messages: payloadMessages,
+      temperature,
+      signal: controller.signal,
+    })) {
       collected += delta;
       write(sseEvent({ delta }));
     }
