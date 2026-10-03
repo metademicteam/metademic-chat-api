@@ -1,2 +1,9 @@
+node_modules
 .vercel
-.env*
+.env
+.env.*
+.env.local
+!.env.example
+__pycache__
+*.log
+.DS_Store
