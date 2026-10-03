@@ -1,6 +1,7 @@
 {
   "name": "metademic-chat-api",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vercel dev",
     "typecheck": "tsc --noEmit"

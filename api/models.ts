@@ -7,7 +7,7 @@ import {
   env,
   modelAllowlist,
   prettyLabel,
-} from "./_shared";
+} from "./_shared.js";
 
 export default async function handler(
   req: IncomingMessage,

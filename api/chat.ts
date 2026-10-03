@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
-  DEFAULT_LLM_MODEL,
   DEFAULT_SYSTEM_PROMPT,
   DEFAULT_VLM_MODEL,
   EFFORT_TEMPERATURE,
@@ -24,7 +23,7 @@ import {
   type ChatMessageIn,
   type ContentPart,
   type ProviderMessage,
-} from "./_shared";
+} from "./_shared.js";
 
 type NodeRequest = IncomingMessage;
 
@@ -89,12 +88,6 @@ function redirectImagesToLastUser(messages: ChatBody["messages"], images: string
   const lastUser = [...converted].reverse().find((m) => m.role === "user");
   if (lastUser) lastUser.images = images;
   return converted;
-}
-
-function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(payload));
 }
 
 export default async function handler(
